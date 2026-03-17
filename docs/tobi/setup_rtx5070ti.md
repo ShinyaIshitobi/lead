@@ -197,6 +197,75 @@ python lead/leaderboard_wrapper.py \
 
 ---
 
+## 10. Bench2Drive ベンチマークの実行
+
+Bench2Drive は 220 本の短距離ルート（各約 150m）で構成されるベンチマーク。
+44 種類の交通シナリオ（右折時の歩行者横断、信号変化への対応等）への対処能力を個別に評価できる。
+
+### ルートファイルの準備
+
+リポジトリには `3rd_party/Bench2Drive/leaderboard/data/bench2drive220.xml` に全 220 ルートが 1 ファイルにまとまっているが、
+評価スクリプトは個別ルートファイル（`data/benchmark_routes/bench2drive/{id}.xml`）を期待する。
+以下のスクリプトで分割する:
+
+```bash
+python -c "
+import xml.etree.ElementTree as ET
+import os
+
+tree = ET.parse('3rd_party/Bench2Drive/leaderboard/data/bench2drive220.xml')
+root = tree.getroot()
+outdir = 'data/benchmark_routes/bench2drive'
+os.makedirs(outdir, exist_ok=True)
+
+for route in root.findall('route'):
+    rid = route.get('id')
+    new_root = ET.Element('routes')
+    new_root.append(route)
+    new_tree = ET.ElementTree(new_root)
+    ET.indent(new_tree)
+    new_tree.write(f'{outdir}/{rid}.xml', xml_declaration=False)
+
+print(f'Split {len(root.findall(\"route\"))} routes')
+"
+```
+
+### 1 ルートで実行
+
+```bash
+python lead/leaderboard_wrapper.py \
+  --checkpoint outputs/checkpoints/tfv6_resnet34 \
+  --routes data/benchmark_routes/bench2drive/23687.xml \
+  --bench2drive
+```
+
+### 別のルートを試す
+
+`data/benchmark_routes/bench2drive/` 内の任意の XML を指定できる:
+
+```bash
+# ルート一覧を確認
+ls data/benchmark_routes/bench2drive/
+
+# 別のルートで実行
+python lead/leaderboard_wrapper.py \
+  --checkpoint outputs/checkpoints/tfv6_resnet34 \
+  --routes data/benchmark_routes/bench2drive/1711.xml \
+  --bench2drive
+```
+
+### bash スクリプトで実行する場合
+
+```bash
+bash scripts/eval_bench2drive.sh
+```
+
+このスクリプトは Bench2Drive 専用の leaderboard evaluator（`3rd_party/Bench2Drive/leaderboard/`）を使用する。
+デフォルトのチェックポイントは `outputs/checkpoints/noradar_resnet34` なので、
+`tfv6_resnet34` を使う場合はスクリプト内の `CHECKPOINT_DIR` を書き換えること。
+
+---
+
 ## トラブルシューティング
 
 ### `No module named 'pkg_resources'`
