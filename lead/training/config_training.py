@@ -280,7 +280,7 @@ class TrainingConfig(BaseConfig):
     @property
     def use_mixed_precision_training(self):
         """If true use mixed precision training."""
-        return self.gpu_name in ["a100", "l40s"]
+        return self.gpu_name in ["a100", "l40s", "rtx5070ti"]
 
     @property
     def need_grad_scaler(self):
@@ -1052,6 +1052,8 @@ class TrainingConfig(BaseConfig):
                 return "rtx3080"
             elif "rtx 5090" in name:
                 return "rtx5090"
+            elif "rtx 5070" in name:
+                return "rtx5070ti"
             else:
                 raise Exception(
                     f"Unknown GPU name: {name}. Please register it in the config."
