@@ -21,6 +21,8 @@
 11. [限界と今後の課題](#11-限界と今後の課題)
 12. [用語集](#12-用語集)
 13. [背景技術と関連論文ガイド](#13-背景技術と関連論文ガイド)
+14. [エキスパートの4段階パイプライン](#14-エキスパートの4段階パイプライン)
+15. [Known Issues と実践Tips](#15-known-issues-と実践tips)
 
 ---
 
@@ -790,21 +792,42 @@ LEADのTFv6はこのTFv5を直接的に改良したもの。Backbone部分はほ
 #### 勉強トピック: TransFuserの進化
 
 ```
-TransFuser v1 (2021, CVPR):
+TransFuser v1 (2021, CVPR) - Prakash et al.
   - 単一解像度での Transformer Fusion
   - Waypoint予測のみ
+  - CARLAリーダーボード初期、データ品質が低い時代
 
-TransFuser++ / TFv5 (2023, T-PAMI):
+TransFuser v2 (2021, Master Thesis) - Jaeger
+  - アーキテクチャ変更なし
+  - 自動ラベリングと補助タスクでデータ品質を改善
+  - データだけで大幅に性能向上（アーキテクチャの重要性 vs データの重要性の初期示唆）
+
+TransFuser v3 (2022, T-PAMI) - Chitta et al.
+  - ジャーナル版。より良いデータ・センサ・バックボーン・厳密なアブレーション
+  - Latent TransFuser（LTF）を初導入: LiDARを位置エンコーディングに置換
+  - v1比で約4倍のCARLAリーダーボード性能
+
+TransFuser v3.5 (2024, NeurIPS)
+  - v3のアーキテクチャとv4のセンサ設定のハイブリッド
+
+TransFuser v4 / TF++ (2023, ICCV) - Jaeger et al.
+  - "Hidden Biases" 論文
+  - 改良されたセンサ設定、アーキテクチャ、学習手法
+  - CARLAリーダーボード1.0でオープンソース最高性能
+
+TransFuser v5 (2024, Tech Report)
+  - CARLAリーダーボード2.0に対応
+  - CVPR 2024 CARLA Challenge 2位
   - 4段階マルチスケール Fusion
   - 補助タスク（BEV、深度、セマンティクス、BBox）
-  - GRU Planning Decoder
-  - Target Point 1個
+  - GRU Planning Decoder、Target Point 1個
 
-TFv6 / LEAD (2026, CVPR):
+TFv6 / LEAD (2026, CVPR) - Nguyen et al.
   - GRU除去、Transformer Planning Decoder
   - Target Point 3個（Dense Route）
   - Radar Detector追加
   - State-Aligned Expert
+  - CVPR 2025 Waymo E2E Challenge 2位
 ```
 
 ---
@@ -995,6 +1018,115 @@ LEADでの使用:
   - GradScaler で勾配スケーリング（FP16の数値範囲制限を回避）
   - スケール値の監視で学習の安定性を確認
 ```
+
+---
+
+## 14. エキスパートの4段階パイプライン
+
+公式ドキュメントでは、LEAD Expertの制御ロジックは以下の4段階として整理されている:
+
+```
+Stage 1: A*グラフ探索で車線トポロジ上の最短経路を計算
+  → CARLAのOpenDRIVEマップから車線グラフを構築
+  → グローバルルートプランナーで経路点列を生成
+
+Stage 2: 静的障害物を迂回するように経路を修正
+  → 工事、駐車車両、事故車両などを検出
+  → shift_route_smoothly() でコサイン補間による滑らかな車線変更
+  → 緊急車両への譲り、自転車の追い越しにも対応
+
+Stage 3: IDM（Intelligent Driver Model）で基準速度を設定
+  → 信号機、停止標識、速度制限に基づく目標速度計算
+  → シナリオごとに異なるIDMパラメータ:
+    - 停止標識: min_distance=2.0m, time_headway=0.5s
+    - 赤信号: min_distance=3.0m, time_headway=0.5s
+    - 歩行者: min_distance=4.5m, time_headway=0.125s
+    - 先行車: min_distance=4.0m, time_headway=0.25s
+
+Stage 4: 移動障害物との相互作用で速度を微調整
+  → 対向車の優先判断
+  → 後方からの追突回避（加速して逃げる）
+  → 割り込み車両への緊急ブレーキ
+  → 横断歩行者の検出と停止
+```
+
+### 勉強トピック: IDM（Intelligent Driver Model）とは
+
+車間距離と速度差に基づいて加減速を決定する古典的な車両追従モデル。1999年にTreiber et al.が提案。パラメータは少ないが、人間の運転行動をよく近似する。
+
+```
+加速度 a = a_max * [1 - (v/v0)^4 - (s*/s)^2]
+
+  v:   現在速度
+  v0:  目標速度
+  s:   先行車との車間距離
+  s*:  望ましい車間距離 = s0 + v*T + v*Δv/(2*sqrt(a_max*b))
+  s0:  最小車間距離 (min_distance)
+  T:   希望車頭時間 (time_headway)
+  b:   快適減速度
+```
+
+LEADでは、シナリオの種類（歩行者、信号、先行車等）ごとにmin_distanceとtime_headwayを変えることで、状況に応じた適切な車間距離を実現している。
+
+---
+
+## 15. Known Issues と実践Tips
+
+### 既知の問題（公式ドキュメントより）
+
+1. マルチGPU学習での性能微減
+   - 4GPU学習がシングルGPUより閉ループ性能がわずかに低い場合がある
+   - 差は僅かだが一貫して発生
+   - 最大性能を求める場合はシングルGPU学習を検討
+
+2. PID制御器の限界
+   - デフォルトのPID制御器は最適ではない
+   - MPC（Model Predictive Control）に置き換えるとBench2Drive DSが5-7点改善する予備実験結果あり
+   - LEADの性能はさらに伸びる余地がある
+
+3. CARLA 0.9.16の非互換性
+   - goal-pointパイプラインに問題があり、ポリシーの動作が劣化する
+   - CARLA 0.9.15を使うこと
+
+4. PyTorch static_graphの回避
+   - static_graphパラメータを使うと性能が低下するため、意図的に回避している
+
+### 評価結果のばらつき
+
+CARLAには内在的な確率性があり、同じチェックポイントでも結果がブレる:
+
+```
+典型的なばらつき:
+  Bench2Drive:  ±1-2 DS
+  Longest6 v2:  ±5-7 DS
+  Town13:       ±1.0 DS
+```
+
+推奨される評価プロトコル:
+- 最低: 3モデル（異なるシード）× 1評価 = 3回の平均
+- 推奨: 3モデル × 3評価 = 9回の平均
+
+### CARLAの運用Tips
+
+- 起動の約10%が失敗する（ポート競合、GPU初期化エラー）
+- 複数ルートを同じCARLAインスタンスで評価するとレンダリングバグが出る → ルート間でCARLAを再起動する
+- Longest6 v2とTown13のルートをBench2Driveの評価リポジトリで評価しないこと（メトリクス定義が異なる）
+
+```bash
+# ルート間のCARLA再起動パターン
+bash scripts/clean_carla.sh
+bash scripts/start_carla.sh
+```
+
+### 評価時間の目安（16-32 GTX 1080 Ti使用時）
+
+| ベンチマーク | 3シード | 備考 |
+|------------|:------:|------|
+| Bench2Drive (220ルート) | ~1日 | 短距離ルートで高速 |
+| Longest6 v2 (36ルート) | ~1日 | 長距離だがルート数少 |
+| Town13 (10ルート) | ~2日 | 1ルート12kmと非常に長い |
+
+動画生成を無効化すると大幅に高速化できる。
 
 ---
 
